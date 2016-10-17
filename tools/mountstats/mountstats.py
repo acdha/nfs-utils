@@ -23,8 +23,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 MA 02110-1301 USA
 """
 
-import sys, os, time
+import json, sys, os, time
 from operator import itemgetter, add
+from warnings import warn
+
 try:
     import argparse
 except ImportError:
@@ -293,7 +295,7 @@ class DeviceData:
             self.__rpc_data[op] = [int(word) for word in words[1:]]
 
     def parse_stats(self, lines):
-        """Turn a list of lines from a mount stat file into a 
+        """Turn a list of lines from a mount stat file into a
         dictionary full of stats, keyed by name
         """
         found = False
@@ -357,6 +359,77 @@ class DeviceData:
         else:
             print('\tnot implemented for version %d' % vers)
         print()
+
+    def get_data(self):
+        """Returns parsed mount data in a JSON-friendly dictionary
+
+        This is intended for monitoring tools which want to reuse the
+        parsing logic but will handle things like rate-calculation
+        themselves and don't need to track configuration options.
+        """
+
+        mountpoint = self.__nfs_data['mountpoint']
+        fstype = self.__nfs_data['fstype']
+
+        d = {'mountpoint': mountpoint, 'fstype': fstype}
+
+        for k in ('age', 'export', 'protocol'):
+            if k in self.__nfs_data:
+                d[k] = self.__nfs_data[k]
+
+        # All stats below this point are specific to NFS:
+
+        if not fstype.startswith('nfs'):
+            return d
+
+        protocol = self.__rpc_data['protocol']
+        # We'll assign this to a local variable for use below:
+        d['version'] = nfs_version = self.__rpc_data['programversion'].split('/')[1]
+
+        d['events'] = {k: self.__nfs_data[k] for k in NfsEventCounters if k in self.__nfs_data}
+        d['bytes'] = {k: self.__nfs_data[k] for k in NfsByteCounters if k in self.__nfs_data}
+
+        # FIXME: Hoist this to a top-level variable?
+        protocol_counters = {'udp': XprtUdpCounters,
+                             'tcp': XprtTcpCounters,
+                             'rdma': XprtRdmaCounters}
+
+        if protocol in protocol_counters:
+            d['transport'] = {k: self.__rpc_data[k] for k in protocol_counters[protocol] if k in self.__rpc_data}
+        elif protocol:
+            warn('Mount %s has unrecognized transport protocol %s' % (mountpoint, protocol))
+
+        if nfs_version == '3':
+            d['operations'] = {op: self.get_dictionary_for_op_stat(op) for op in Nfsv3ops}
+        elif nfs_version == '4':
+            d['operations'] = {op: self.get_dictionary_for_op_stat(op) for op in Nfsv4ops}
+        else:
+            warn('%s: per-operation NFS stats have not been tested with NFS version %s' % (mountpoint,
+                                                                                           nfs_version))
+            all_nfs_ops = {op for op in Nfsv3ops + Nfsv4ops if op in self.__rpc_data}
+            d['operations'] = {op: self.get_dictionary_for_op_stat(op) for op in all_nfs_ops}
+
+        return d
+
+    def get_dictionary_for_op_stat(self, op_name):
+        """Convert a list of raw per-op values into a dictionary with named keys"""
+
+        stats = self.__rpc_data[op_name]
+
+        # We'll alias this here to avoid the extra lookup for the retransmit count:
+        count = stats[0]
+
+        return {
+            'name': op_name,
+            'count': count,
+            'retrans': stats[1] - count,
+            'timeouts': stats[2],
+            'avg_bytes_sent_per_op': stats[3],
+            'avg_bytes_received_per_op': stats[4],
+            'backlog': stats[5],
+            'rtt': stats[6],
+            'execution_time': stats[7],
+        }
 
     def display_stats_header(self):
         print('Stats for %s mounted on %s:' % \
@@ -718,6 +791,7 @@ def mountstats_command(args):
             stats.parse_stats(descr)
             if stats.is_nfs_mountpoint():
                 mountpoints += [device]
+
     if len(mountpoints) == 0:
         print('No NFS mount points were found')
         return 1
@@ -728,7 +802,10 @@ def mountstats_command(args):
     for mp in mountpoints:
         stats = DeviceData()
         stats.parse_stats(mountstats[mp])
-        if not args.since:
+
+        if args.as_json:
+            print(json.dumps(stats.get_data()))
+        elif not args.since:
             print_mountstats(stats, args.nfs_only, args.rpc_only, args.raw)
         elif args.since and mp not in old_mountstats:
             print_mountstats(stats, args.nfs_only, args.rpc_only, args.raw)
@@ -878,7 +955,7 @@ def iostat_command(args):
             sample_time = args.interval
             mountstats = parse_stats_file(args.infile)
             count -= 1
-    else: 
+    else:
         while True:
             print_iostat_summary(old_mountstats, mountstats, devices, sample_time)
             old_mountstats = mountstats
@@ -954,6 +1031,9 @@ def main():
         help='Display statistics for this mountpoint. More than one may be specified. '
             'If absent, statistics for all NFS mountpoints will be generated.')
     mountstats_parser.set_defaults(func=mountstats_command)
+    mountstats_parser.add_argument('--as-json',
+        action='store_true',
+        help='Export current raw mountstats data as line-oriented JSON')
 
     nfsstat_parser = subparsers.add_parser('nfsstat',
         parents=[common_parser],
@@ -984,7 +1064,7 @@ def main():
         help='Display statsistics for this mountpoint. More than one may be specified. '
             'If absent, statistics for all NFS mountpoints will be generated.')
     iostat_parser.set_defaults(func=iostat_command)
- 
+
     args = parser.parse_args()
     return args.func(args)
 
