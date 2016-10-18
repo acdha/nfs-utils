@@ -45,7 +45,7 @@ def print_mount_data(mount_data):
         for name, value in counters.items():
             if name == 'name':
                 continue
-            print('nfs_mountstat_op_%s_%s{%s}' % (op, name, common_labels), value)
+            print('nfs_mountstat_op_%s{op="%s",%s}' % (name, op, common_labels), value)
 
 if __name__ == '__main__':
     for mount_data in get_device_data():
