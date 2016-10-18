@@ -30,22 +30,22 @@ def print_mount_data(mount_data):
     common_labels = ','.join('%s="%s"' % (k, mount_data[k]) for k in ('version', 'mountpoint', 'export'))
 
     for k in ('age', ):
-        print('nfs_mountstat_%s{%s}' % (k, common_labels), mount_data[k])
+        print('mountstat_nfs_%s{%s}' % (k, common_labels), mount_data[k])
 
     for name, value in mount_data['events'].items():
-        print('nfs_mountstat_events_%s{%s}' % (name, common_labels), value)
+        print('mountstat_nfs_events_%s{%s}' % (name, common_labels), value)
 
     for name, value in mount_data['bytes'].items():
-        print('nfs_mountstat_%s{%s}' % (name, common_labels), value)
+        print('mountstat_nfs_%s{%s}' % (name, common_labels), value)
 
     for name, value in mount_data['transport'].items():
-        print('nfs_mountstat_transport_%s{%s}' % (name, common_labels), value)
+        print('mountstat_nfs_transport_%s{%s}' % (name, common_labels), value)
 
     for op, counters in mount_data['operations'].items():
         for name, value in counters.items():
             if name == 'name':
                 continue
-            print('nfs_mountstat_op_%s{op="%s",%s}' % (name, op, common_labels), value)
+            print('mountstat_nfs_op_%s{op="%s",%s}' % (name, op, common_labels), value)
 
 if __name__ == '__main__':
     for mount_data in get_device_data():
